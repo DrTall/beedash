@@ -80,6 +80,26 @@ def prep_number(n):
   n = n.replace(' ', '&nbsp;')
   return n
 
+def prep_percent(num, den, no_plus=False):
+  if not den:
+    return 'N/A&nbsp;&nbsp;'
+  fmt = '%+.0f%%'
+  if no_plus:
+    fmt = fmt.replace('+', '')
+  n = fmt % (100.0 * num / den)
+  n = n.ljust(5)
+  n = n.replace(' ', '&nbsp;')
+  return n
+
+# y, m, w, d, h
+RUNITS_TIMEDELTAS = {
+    'y': timedelta(weeks=52),
+    'm': timedelta(weeks=4),
+    'w': timedelta(weeks=1),
+    'd': timedelta(days=1),
+    'h': timedelta(hours=1),
+    }
+
 result = ['<meta charset="UTF-8"><html><body><font face=monaco>']
 for zero_inverter in [True, False]:
   for goal_type in ['hustler', 'drinker']: #, 'biker', 'fatloser', 'gainer', 'inboxer', 'drinker', 'custom']:
@@ -89,8 +109,7 @@ for zero_inverter in [True, False]:
         continue
       if goal['goal_type'] != goal_type:
         continue
-      wow = 'N/A' if not goal_metadata[title].prior_week_count else '%+.0f%%' % (100.0 * (goal_metadata[title].week_count - goal_metadata[title].prior_week_count) / goal_metadata[title].prior_week_count)
-      wow = wow.rjust(5)
+      wow = prep_percent(goal_metadata[title].week_count - goal_metadata[title].prior_week_count, goal_metadata[title].prior_week_count)
       colors = {True: "red", False: "green"}
       if '-' in wow[:2]:
         wow = wow.replace(' ', '&nbsp;')
@@ -103,7 +122,16 @@ for zero_inverter in [True, False]:
       today = prep_number(goal_metadata[title].today_count)
       week = prep_number(goal_metadata[title].week_count / NUM_WEEKS)
       two_weeks = prep_number(goal_metadata[title].prior_week_count / NUM_WEEKS)
-      line ='%s today %s weekly (%s) %s<br>' % (today, week, wow, title)
+      goal_rate = goal['rate'] or 0.0
+      weekly_goal_rate = timedelta(weeks=1).total_seconds() * goal_rate / RUNITS_TIMEDELTAS[goal['runits']].total_seconds()
+      rate = prep_number(weekly_goal_rate)
+      gor = prep_percent(goal_metadata[title].week_count / NUM_WEEKS, weekly_goal_rate, no_plus=True)
+      if gor.find('%') < 3:
+        gor = '<font color="%s">%s</font>' % (colors[goal['goal_type'] == 'hustler'], gor)
+      else:
+        gor = '<font color="%s">%s</font>' % (colors[goal['goal_type'] != 'hustler'], gor)
+
+      line ='%s today %s weekly vs %s (%s of goal, %s w/w) %s<br>' % (today, week, rate, gor, wow, title)
       if not zero_inverter:
         line = '<font color="grey">%s</font>' % line.replace('font', 'span')
       if goal['goal_type'] == 'drinker':
