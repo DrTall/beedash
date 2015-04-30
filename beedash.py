@@ -40,31 +40,38 @@ def epoch_time(d):
 
 TODAY = date.today()
 ONE_DAY = timedelta(days=1).total_seconds()
-NUM_WEEKS = 2
-WEEK_AGO = TODAY - timedelta(weeks=NUM_WEEKS)
-TWO_WEEKS_AGO = TODAY - timedelta(weeks=NUM_WEEKS * 2)
-TWO_WEEKS_AGO_EPOCH = epoch_time(TWO_WEEKS_AGO)
+NUM_WEEKS_PER_SAMPLE = 2
+SAMPLE_MIDDLE = TODAY - timedelta(weeks=NUM_WEEKS_PER_SAMPLE)
+SAMPLE_END = TODAY - timedelta(weeks=NUM_WEEKS_PER_SAMPLE * 2)
+SAMPLE_END_EPOCH = epoch_time(SAMPLE_END)
 
-GoalMetadata = collections.namedtuple('GoalMetadata', ['today_count', 'week_count', 'prior_week_count'])
+class GoalMetadata:
+  def __init__(self):
+    self.today_count = 0
+    # Includes today.
+    self.middle_count = 0
+    # Does not include middle.
+    self.end_count = 0
+
 Datapoint = collections.namedtuple('Datapoint', ['timestamp', 'value', 'comment', 'id', 'updated_at', 'requestid', 'daystamp', 'canonical'])
 
 beeminder_url = 'https://www.beeminder.com/api/v1/users/me.json'
-beeminder_url += ('?diff_since=%s&' % TWO_WEEKS_AGO_EPOCH)  + urllib.urlencode(
+beeminder_url += ('?diff_since=%s&' % SAMPLE_END_EPOCH)  + urllib.urlencode(
     {'auth_token':secrets.BEEMINDER_AUTH_TOKEN})
 user_data = json.loads(urllib2.urlopen(beeminder_url).read())
 
-goal_metadata = collections.defaultdict(lambda: GoalMetadata(0, 0, 0))
+goal_metadata = collections.defaultdict(GoalMetadata)
 for goal in user_data['goals']:
   points = [Datapoint(**p) for p in goal['datapoints']]
   points = [p._replace(daystamp = datetime.strptime(p.daystamp, '%Y%m%d').date()) for p in points]
 
   for point in reversed(points):
     if point.daystamp == TODAY:
-      goal_metadata[goal['title']] = goal_metadata[goal['title']]._replace(today_count=point.value + goal_metadata[goal['title']].today_count)
-    if point.daystamp >= WEEK_AGO:
-      goal_metadata[goal['title']] = goal_metadata[goal['title']]._replace(week_count=point.value + goal_metadata[goal['title']].week_count)
-    elif point.daystamp >= TWO_WEEKS_AGO and goal['initday'] < TWO_WEEKS_AGO_EPOCH:
-      goal_metadata[goal['title']] = goal_metadata[goal['title']]._replace(prior_week_count=point.value + goal_metadata[goal['title']].prior_week_count)
+      goal_metadata[goal['title']].today_count += point.value
+    if point.daystamp >= SAMPLE_MIDDLE:
+      goal_metadata[goal['title']].middle_count += point.value
+    elif point.daystamp >= SAMPLE_END and goal['initday'] < SAMPLE_END_EPOCH:
+      goal_metadata[goal['title']].end_count += point.value
 
 def prep_number(n):
   fmt = '%+.02f'
@@ -109,7 +116,7 @@ for zero_inverter in [True, False]:
         continue
       if goal['goal_type'] != goal_type:
         continue
-      wow = prep_percent(goal_metadata[title].week_count - goal_metadata[title].prior_week_count, goal_metadata[title].prior_week_count)
+      wow = prep_percent(goal_metadata[title].middle_count - goal_metadata[title].end_count, goal_metadata[title].end_count)
       colors = {True: "red", False: "green"}
       if '-' in wow[:2]:
         wow = wow.replace(' ', '&nbsp;')
@@ -120,12 +127,12 @@ for zero_inverter in [True, False]:
       else:
         wow = wow.replace(' ', '&nbsp;')
       today = prep_number(goal_metadata[title].today_count)
-      week = prep_number(goal_metadata[title].week_count / NUM_WEEKS)
-      two_weeks = prep_number(goal_metadata[title].prior_week_count / NUM_WEEKS)
+      week = prep_number(goal_metadata[title].middle_count / NUM_WEEKS_PER_SAMPLE)
+      two_weeks = prep_number(goal_metadata[title].end_count / NUM_WEEKS_PER_SAMPLE)
       goal_rate = goal['rate'] or 0.0
       weekly_goal_rate = timedelta(weeks=1).total_seconds() * goal_rate / RUNITS_TIMEDELTAS[goal['runits']].total_seconds()
       rate = prep_number(weekly_goal_rate)
-      gor = prep_percent(goal_metadata[title].week_count / NUM_WEEKS, weekly_goal_rate, no_plus=True)
+      gor = prep_percent(goal_metadata[title].middle_count / NUM_WEEKS_PER_SAMPLE, weekly_goal_rate, no_plus=True)
       if gor.find('%') < 3:
         gor = '<font color="%s">%s</font>' % (colors[goal['goal_type'] == 'hustler'], gor)
       else:
