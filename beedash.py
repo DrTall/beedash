@@ -1,26 +1,24 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 """
-Searches your Gmail inbox for emails that look like they're from the
-Beeminder Bot and archives them if the goal they're nagging you about has
-data newer than the reminder.
+Generates a simple Beeminder dashboard displaying:
+  1. Today's progress
+  2. Average weekly progress for the last 2 weeks.
+  3. Goal rate
+  4. The ratio of 2 & 3
+  5. The ratio of 2 and the prior 2 weeks (3-4 weeks ago vs 1-2 weeks ago)
 
-This script only checks the datestamp on goal data. You might still be about
-to derail the goal, so you might need to be careful if it's an eep day and
-you've put in some data but not enough to give a safe day.
+Currently only hustler and drinker goals are supported.
 
 Setup:
-1. pip install google-api-python-client
-2. Follow instructions in secrets.py.
-3. Run ./beebegone.py in a working directory it can write to (for caching
-the Gmail credentials) and authorize the app in the web browser. Future runs
-won't require human interaction unless you delete your gmail.storage
-credentials.
+1. Follow instructions in secrets.py.
+2. Run ./beebegone.py in a working directory it can write to.
+3. Open beedash.html in a web browser.
 4. Set up a cron job to run this script periodically (optional, but not
 very useful otherwise).
 
 Example Usage (in a working directory you can write to):
-./beebegone.py
+./beedash.py
 """
 
 import codecs
@@ -207,7 +205,6 @@ for data in sorted(dipslay_data, key=lambda d: (
     line = '<font color="grey">%s</font>' % line.replace('font', 'span')
   line = line.replace('+', POSITIVE_INCREMENT_SYMBOL[data.goal_type])
   result.append(line)
-  #result.append('<br>')
 
 result.append('<br><br>Updated: %s' % datetime.now())
 result.append('</body></html>')
