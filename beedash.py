@@ -52,22 +52,78 @@ RUNITS_TIMEDELTAS = {
     'h': timedelta(hours=1),
     }
 
-# These symbols replace the '+' character for goals for which it doesn't quite
-# make sense. For example, drinks are bad in the drinker goals, but are still
-# "up" or positive in the mathematical sense.
-POSITIVE_INCREMENT_SYMBOL = collections.defaultdict(lambda: '+')
-POSITIVE_INCREMENT_SYMBOL.update({
-    'drinker': u'▲',
-    'hustler': '+',
-})
 
-# To support things like inboxer and biker, this should become a dict
-# mapping onto aggregation functions. Instead of just +='ing data points
-# together, we should ask what function is used to aggregate the data points
-# for the goal_type in question.
-#
-# For now, just discard goals that don't sum.
-SUPPORTED_GOAL_TYPES = POSITIVE_INCREMENT_SYMBOL.keys()
+class HustlerAggregator(object):
+  def __init__(self):
+    self.total = 0
+
+  def record(self, point):
+    self.total += point
+
+  def record_prior_period(self, _):
+    pass
+
+  def delta(self):
+    return self.total
+
+
+class InboxerAggregator(object):
+  def __init__(self):
+    self.initial = None
+    self.final = None
+
+  def record(self, point):
+    if self.initial == None:
+      self.initial = point
+    self.final = point
+
+  def record_prior_period(self, point):
+    self.initial = point
+
+  def delta(self):
+    return (0 if self.initial is None or self.final is None else
+            self.final - self.initial)
+
+
+class BikerAggregator(object):
+  def __init__(self):
+    self.initial = None
+    self.final = None
+    self.accumulated = 0
+
+  def record(self, point):
+    if self.initial == None:
+      self.initial = point
+    if point == 0:
+      self.accumulated = 0 if self.final is None else self.final
+    self.final = self.accumulated + point
+
+  def record_prior_period(self, point):
+    self.initial = point
+
+  def delta(self):
+    return (0 if self.initial is None or self.final is None else
+            self.final - self.initial)
+
+
+def get_goal_aggregator(goal):
+  if goal['odom']:
+    return BikerAggregator
+  if goal['aggday'] == 'sum':
+    return HustlerAggregator
+  return InboxerAggregator
+
+
+def substitute_do_less_symbols(string):
+  """Replace the +/- symbols with up/down triangles for yaw!=dir goals.
+
+  These symbols set WEEN/RASH goals apart from PHAT/MOAR goals. If you see
+  +/-, you want the absolute value to be as big as possible. If you see the
+  triangles, you want the absolute value to be as small as possible.
+  """
+  return string.replace('+', u'▲').replace('-', u'▼')
+
+
 
 # Holy hacks Batman! The extra spaces in "red  " let us compare string lengths
 # later...
@@ -77,12 +133,12 @@ COLORS = {True: "red  ", False: "green", None: "black"}
 class GoalMetadata(object):
   """Tracks the data sums for a goal. The length of middle and end are
   configured in the constants above."""
-  def __init__(self):
-    self.today_count = 0
+  def __init__(self, aggregator_constructor):
+    self.today_count = aggregator_constructor()
     # Includes today.
-    self.middle_count = 0
+    self.middle_count = aggregator_constructor()
     # Does not include middle.
-    self.end_count = 0
+    self.end_count = aggregator_constructor()
 
 
 # Per the Beeminder API
@@ -95,7 +151,7 @@ beeminder_url += ('?diff_since=%s&' % SAMPLE_END_EPOCH)  + urllib.urlencode(
     {'auth_token':secrets.BEEMINDER_AUTH_TOKEN})
 user_data = json.loads(urllib2.urlopen(beeminder_url).read())
 
-goal_metadata = collections.defaultdict(GoalMetadata)
+goal_metadata = {}
 for goal in user_data['goals']:
   points = [Datapoint(**p) for p in goal['datapoints']]
   # Convert the daystamp string into a real date object.
@@ -103,13 +159,18 @@ for goal in user_data['goals']:
       p._replace(daystamp=datetime.strptime(p.daystamp, '%Y%m%d').date())
       for p in points]
 
-  for point in reversed(points):
+  meta = GoalMetadata(get_goal_aggregator(goal))
+  for point in points:
     if point.daystamp == TODAY:
-      goal_metadata[goal['title']].today_count += point.value
-    if point.daystamp >= SAMPLE_MIDDLE:
-      goal_metadata[goal['title']].middle_count += point.value
+      meta.today_count.record(point.value)
+    elif point.daystamp >= SAMPLE_MIDDLE:
+      meta.today_count.record_prior_period(point.value)
+      meta.middle_count.record(point.value)
     elif point.daystamp >= SAMPLE_END and goal['initday'] < SAMPLE_END_EPOCH:
-      goal_metadata[goal['title']].end_count += point.value
+      meta.today_count.record_prior_period(point.value)
+      meta.middle_count.record_prior_period(point.value)
+      meta.end_count.record(point.value)
+  goal_metadata[goal['title']] = meta
 
 # Returns a pretty string number.
 def prep_number(n):
@@ -140,53 +201,48 @@ DISPLAY_ROW_FIELDS = [
     'today', 'weekly', 'weekly_goal', 'percent_of_goal', 'percent_wow', 'title']
 DisplayRow = collections.namedtuple('DisplayRow', DISPLAY_ROW_FIELDS)
 
-# display_row: A GoalDisplayData object
-# goal_type: One of ['hustler', 'drinker', 'biker', 'fatloser',
-#                    'gainer', 'inboxer', 'drinker', 'custom']
-# data_today: True iff there was a non-zero total today.
-# eep: True iff this goal is eeping.
 GoalDisplayData = collections.namedtuple('GoalDisplayData', [
-    'display_row', 'goal_type', 'data_today', 'eep'])
+    'display_row', 'goal', 'goal_meta'])
 
 # [GoalDisplayData, ...]
 dipslay_data = []
 
 for goal in user_data['goals']:
-  if goal['goal_type'] not in SUPPORTED_GOAL_TYPES:
-    continue
-
   goal_meta = goal_metadata[goal['title']]
-  goal_rate = goal['rate'] or 0.0
+  goal_rate = goal['mathishard'][2] or 0.0
   weekly_goal_rate = (timedelta(weeks=1).total_seconds() * goal_rate /
                       RUNITS_TIMEDELTAS[goal['runits']].total_seconds())
   # The actual rate divided by the goal rate.
   rog_pretty, rog_raw = prep_percent(
-      goal_meta.middle_count / NUM_WEEKS_PER_SAMPLE,
+      (goal_meta.middle_count.delta() + goal_meta.today_count.delta()) /
+      NUM_WEEKS_PER_SAMPLE,
       weekly_goal_rate, no_plus=True)
   rog_pretty = '<font color="%s">%s</font>' % (
-      COLORS[None if abs(100 - rog_raw) < 10 else
-             (goal['goal_type'] == 'hustler') != (rog_raw > 100)], rog_pretty)
+      COLORS[None if abs(100 - rog_raw) < 10 or not weekly_goal_rate else
+             (goal['yaw'] * goal['dir'] == 1) != (rog_raw > 100)], rog_pretty)
 
   # The middle count divided by the end count.
   wow_pretty, wow_raw = prep_percent(
-      goal_meta.middle_count - goal_meta.end_count, goal_meta.end_count)
+      goal_meta.middle_count.delta() + goal_meta.today_count.delta() -
+      goal_meta.end_count.delta(),
+      goal_meta.end_count.delta())
   wow_pretty = '<font color="%s">%s</font>' % (
       COLORS[None if abs(wow_raw) < 10 else
-             (goal['goal_type'] == 'hustler') != (wow_raw > 0)], wow_pretty)
+             (goal['yaw'] * goal['dir'] == 1) != (wow_raw > 0)], wow_pretty)
 
   dipslay_data.append(GoalDisplayData(
       DisplayRow(
-          prep_number(goal_meta.today_count),
-          prep_number(goal_meta.middle_count / NUM_WEEKS_PER_SAMPLE),
+          prep_number(goal_meta.today_count.delta()),
+          prep_number((goal_meta.middle_count.delta() +
+                       goal_meta.today_count.delta()) / NUM_WEEKS_PER_SAMPLE),
           prep_number(weekly_goal_rate),
           rog_pretty,
           wow_pretty,
           goal['title']),
-      goal['goal_type'],
-      bool(goal_meta.today_count),
-      goal['losedate'] > TODAY_EPOCH and
-      goal['losedate'] - TODAY_EPOCH < 2 * ONE_DAY,
+      goal,
+      goal_meta,
       ))
+del goal
 
 # Compute the maximum length for each field in all DisplayRows.
 maximum_lengths = {
@@ -196,20 +252,24 @@ maximum_lengths = {
 result = ['<meta charset="UTF-8"><html><body><font face=monaco>']
 first_grey_found = False
 for data in sorted(dipslay_data, key=lambda d: (
-    not d.data_today, -ord(d.goal_type[0]), d.display_row.title)):
+    not d.goal_meta.today_count.delta(),
+    -ord(d.goal['goal_type'][0]),
+    d.display_row.title)):
   line = '%s today %s weekly vs %s (%s of goal, %s w/w) %s<br>' % tuple(
       # Hacks because ljust won't accept a string as an input...
       element + '&nbsp;' * (maximum_lengths[index] - len(element))
       for index, element in enumerate(data.display_row))
-  if not data.data_today:
+  if not data.goal_meta.today_count.delta():
     if not first_grey_found:
       result.append('<br><br>')
       first_grey_found = True
     # This is a hack to avoid nesting font tags by replacing existing ones with
     # spans. Should I be using CSS? Probably.
     line = '<font color="grey">%s</font>' % line.replace('font', 'span')
-  line = line.replace('+', POSITIVE_INCREMENT_SYMBOL[data.goal_type])
-  if data.eep:
+  if data.goal['dir'] != data.goal['yaw']:
+    line = substitute_do_less_symbols(line)
+  if (data.goal['losedate'] > TODAY_EPOCH and
+      data.goal['losedate'] - TODAY_EPOCH < 2 * ONE_DAY):
     line = '<span style="background-color:#ff9900;">%s</span>' % line
   result.append(line)
 
