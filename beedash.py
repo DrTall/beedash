@@ -222,10 +222,13 @@ for goal in user_data['goals']:
              (goal['yaw'] * goal['dir'] == 1) != (rog_raw > 100)], rog_pretty)
 
   # The middle count divided by the end count.
+  wow_denom = (0 if goal['initday'] > SAMPLE_END_EPOCH
+               else goal_meta.end_count.delta())
   wow_pretty, wow_raw = prep_percent(
       goal_meta.middle_count.delta() + goal_meta.today_count.delta() -
       goal_meta.end_count.delta(),
-      goal_meta.end_count.delta())
+      wow_denom,
+      )
   wow_pretty = '<font color="%s">%s</font>' % (
       COLORS[None if abs(wow_raw) < 10 else
              (goal['yaw'] * goal['dir'] == 1) != (wow_raw > 0)], wow_pretty)
