@@ -212,6 +212,8 @@ for goal in user_data['goals']:
   goal_rate = goal['mathishard'][2] or 0.0
   weekly_goal_rate = (timedelta(weeks=1).total_seconds() * goal_rate /
                       RUNITS_TIMEDELTAS[goal['runits']].total_seconds())
+  if not weekly_goal_rate:
+    continue
   # The actual rate divided by the goal rate.
   rog_pretty, rog_raw = prep_percent(
       (goal_meta.middle_count.delta() + goal_meta.today_count.delta()) /
