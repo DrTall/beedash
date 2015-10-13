@@ -146,13 +146,17 @@ Datapoint = collections.namedtuple('Datapoint', [
     'timestamp', 'value', 'comment', 'id', 'updated_at', 'requestid',
     'daystamp', 'canonical'])
 
-beeminder_url = 'https://www.beeminder.com/api/v1/users/me.json'
-beeminder_url += ('?diff_since=%s&' % SAMPLE_END_EPOCH)  + urllib.urlencode(
-    {'auth_token':secrets.BEEMINDER_AUTH_TOKEN})
-user_data = json.loads(urllib2.urlopen(beeminder_url).read())
+goals = []
+for auth_token in secrets.BEEMINDER_AUTH_TOKENS:
+  beeminder_url = 'https://www.beeminder.com/api/v1/users/me.json'
+  beeminder_url += ('?diff_since=%s&' % SAMPLE_END_EPOCH)  + urllib.urlencode(
+      {'auth_token':auth_token})
+  user_data = json.loads(urllib2.urlopen(beeminder_url).read())
+  goals.extend(user_data['goals'])
+  del user_data
 
 goal_metadata = {}
-for goal in user_data['goals']:
+for goal in goals:
   points = [Datapoint(**p) for p in goal['datapoints']]
   # Convert the daystamp string into a real date object.
   points = [
@@ -207,7 +211,7 @@ GoalDisplayData = collections.namedtuple('GoalDisplayData', [
 # [GoalDisplayData, ...]
 dipslay_data = []
 
-for goal in user_data['goals']:
+for goal in goals:
   goal_meta = goal_metadata[goal['title']]
   goal_rate = goal['mathishard'][2] or 0.0
   weekly_goal_rate = (timedelta(weeks=1).total_seconds() * goal_rate /
