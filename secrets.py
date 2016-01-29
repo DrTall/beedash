@@ -11,3 +11,10 @@ SLACK_CHAN_ID = ''
 SLACK_BEEMINDER_USERNAME = ''
 # A human-readable name for you.
 SLACK_BEEMINDER_FRIENDLY_NAME = ''
+
+# Where to emit the dashboard.
+DASHBOARD_PATH= 'beedash.html'
+
+# The name of your Beelint (https://github.com/DrTall/beelint) goal to
+# reference for violations.
+BEELINT_GOAL_NAME = 'beelint'

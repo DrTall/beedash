@@ -154,6 +154,7 @@ Datapoint = collections.namedtuple('Datapoint', [
     'daystamp', 'canonical'])
 
 goals = []
+lint_violations = []
 for auth_token in secrets.BEEMINDER_AUTH_TOKENS:
   beeminder_url = 'https://www.beeminder.com/api/v1/users/me.json'
   beeminder_url += ('?diff_since=%s&' % SAMPLE_END_EPOCH)  + urllib.urlencode(
@@ -169,6 +170,11 @@ for goal in goals:
   points = [
       p._replace(daystamp=datetime.strptime(p.daystamp, '%Y%m%d').date())
       for p in points]
+
+  if goal['slug'] == secrets.BEELINT_GOAL_NAME and points:
+    lint_violations = points[-1].comment.split(',')
+    print 'Found the Beelint goal! lint_violations = %s' % lint_violations
+
 
   meta = GoalMetadata(get_goal_aggregator(goal))
   for point in points:
@@ -223,8 +229,12 @@ for goal in goals:
   goal_rate = goal['mathishard'][2] or 0.0
   weekly_goal_rate = (timedelta(weeks=1).total_seconds() * goal_rate /
                       RUNITS_TIMEDELTAS[goal['runits']].total_seconds())
-  if not weekly_goal_rate:
+
+  # Hide the Beelint goal since we know it is updated daily and is not
+  # very interesting by itself.
+  if goal['slug'] == secrets.BEELINT_GOAL_NAME:
     continue
+
   # The actual rate divided by the goal rate.
   rog_pretty, rog_raw = prep_percent(
       (goal_meta.middle_count.delta() + goal_meta.today_count.delta()) /
@@ -291,14 +301,15 @@ for data in sorted(dipslay_data, key=lambda d: (
         data.goal['losedate'] - TODAY_EPOCH < 2 * ONE_DAY):
       line = '<span style="background-color:#ff9900;">%s</span>' % line
       current_eep_goals.add(data.goal['slug'])
-    elif VACAY_HACK_EPOCH_START - TODAY_EPOCH <= 10 * ONE_DAY and data.goal['losedate'] <= VACAY_HACK_EPOCH_END:
+    elif data.goal['slug'] in lint_violations or (
+        VACAY_HACK_EPOCH_START - TODAY_EPOCH <= 10 * ONE_DAY and data.goal['losedate'] <= VACAY_HACK_EPOCH_END):
       line = '<span style="background-color:#ffc0cb;">%s</span>' % line
   result.append(line)
 
 result.append('<br><br>Updated: %s' % datetime.now())
 result.append('</body></html>')
 
-with codecs.open('beedash.html', 'w', 'utf-8') as f:
+with codecs.open(secrets.DASHBOARD_PATH, 'w', 'utf-8') as f:
   f.write(u'\n'.join(result))
 
 if secrets.SLACK_AUTH_TOKEN:
