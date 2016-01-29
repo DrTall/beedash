@@ -3,10 +3,10 @@
 """
 Generates a simple Beeminder dashboard displaying:
   1. Today's progress
-  2. Average weekly progress for the last 2 weeks.
+  2. Average weekly progress for the last 4 weeks.
   3. Goal rate
   4. The ratio of 2 & 3
-  5. The ratio of 2 and the prior 2 weeks (3-4 weeks ago vs 1-2 weeks ago)
+  5. The ratio of 2 and the prior 4 weeks (5-8 weeks ago vs 1-4 weeks ago)
 
 Currently only hustler and drinker goals are supported.
 
@@ -21,12 +21,14 @@ Example Usage (in a working directory you can write to):
 ./beedash.py
 """
 
+import ast
 import codecs
 import collections
 import urllib
 import json
 import urllib2
 from datetime import (date, datetime, timedelta)
+from slackclient import SlackClient
 
 import secrets
 
@@ -38,10 +40,15 @@ def epoch_time(d):
 TODAY = date.today()
 TODAY_EPOCH = epoch_time(TODAY)
 ONE_DAY = timedelta(days=1).total_seconds()
-NUM_WEEKS_PER_SAMPLE = 2
+NUM_WEEKS_PER_SAMPLE = 4
 SAMPLE_MIDDLE = TODAY - timedelta(weeks=NUM_WEEKS_PER_SAMPLE)
 SAMPLE_END = TODAY - timedelta(weeks=NUM_WEEKS_PER_SAMPLE * 2)
 SAMPLE_END_EPOCH = epoch_time(SAMPLE_END)
+
+VACAY_HACK_END = date(2016, 1, 25)
+VACAY_HACK_EPOCH_END = epoch_time(VACAY_HACK_END)
+VACAY_HACK_START = VACAY_HACK_END - timedelta(days=3)
+VACAY_HACK_EPOCH_START = epoch_time(VACAY_HACK_START)
 
 # y, m, w, d, h
 RUNITS_TIMEDELTAS = {
@@ -260,11 +267,12 @@ maximum_lengths = {
 
 result = ['<meta charset="UTF-8"><html><body><font face=monaco>']
 first_grey_found = False
+current_eep_goals = set()
 for data in sorted(dipslay_data, key=lambda d: (
     not d.goal_meta.today_count.delta(),
     -ord(d.goal['goal_type'][0]),
     d.display_row.title)):
-  line = '%s today %s weekly vs %s (%s of goal, %s w/w) %s<br>' % tuple(
+  line = '%s today %s weekly vs %s (%s of goal, %s m/m) %s<br>' % tuple(
       # Hacks because ljust won't accept a string as an input...
       element + '&nbsp;' * (maximum_lengths[index] - len(element))
       for index, element in enumerate(data.display_row))
@@ -277,9 +285,14 @@ for data in sorted(dipslay_data, key=lambda d: (
     line = '<font color="grey">%s</font>' % line.replace('font', 'span')
   if data.goal['dir'] != data.goal['yaw']:
     line = substitute_do_less_symbols(line)
-  if (data.goal['losedate'] > TODAY_EPOCH and
-      data.goal['losedate'] - TODAY_EPOCH < 2 * ONE_DAY):
-    line = '<span style="background-color:#ff9900;">%s</span>' % line
+  # Is it an eep!?
+  else:
+    if (data.goal['losedate'] > TODAY_EPOCH and
+        data.goal['losedate'] - TODAY_EPOCH < 2 * ONE_DAY):
+      line = '<span style="background-color:#ff9900;">%s</span>' % line
+      current_eep_goals.add(data.goal['slug'])
+    elif VACAY_HACK_EPOCH_START - TODAY_EPOCH <= 10 * ONE_DAY and data.goal['losedate'] <= VACAY_HACK_EPOCH_END:
+      line = '<span style="background-color:#ffc0cb;">%s</span>' % line
   result.append(line)
 
 result.append('<br><br>Updated: %s' % datetime.now())
@@ -287,5 +300,48 @@ result.append('</body></html>')
 
 with codecs.open('beedash.html', 'w', 'utf-8') as f:
   f.write(u'\n'.join(result))
+
+if secrets.SLACK_AUTH_TOKEN:
+  print 'Currently eep!ing goals: %s' % current_eep_goals
+  def slack_msg_eep(slug):
+      sc.api_call(
+        'chat.postMessage',
+        channel=secrets.SLACK_CHAN_ID,
+        username='Beeminder Bot',
+        icon_url='https://avatars.slack-edge.com/2015-10-26/13284050673_1c5942e75748a08869cf_48.jpg',
+        text="Eep! %s's Beeminder goal <http://www.beeminder.com/%s/goals/%s|%s> is red!" % (
+            secrets.SLACK_BEEMINDER_FRIENDLY_NAME, secrets.SLACK_BEEMINDER_USERNAME, slug, slug))
+  def slack_msg_adios(slug, num_left):
+      left_str = '%s more eep!s left today.' % num_left if num_left else 'No more eep!s left today! Hooray!'
+      sc.api_call(
+        'chat.postMessage',
+        channel=secrets.SLACK_CHAN_ID,
+        username='Beeminder Bot',
+        icon_url='https://avatars.slack-edge.com/2015-10-26/13284050673_1c5942e75748a08869cf_48.jpg',
+        text="Whew, %s's Beeminder goal <http://www.beeminder.com/%s/goals/%s|%s> is no longer red!\n%s" % (
+            secrets.SLACK_BEEMINDER_FRIENDLY_NAME, secrets.SLACK_BEEMINDER_USERNAME, slug, slug, left_str))
+
+
+  sc = SlackClient(secrets.SLACK_AUTH_TOKEN)
+  if not sc.rtm_connect():
+      print "Slack connection failed!"
+  else:
+    old_eep_goals = set()
+    try:
+      with open('eeps.txt') as f:
+        old_eep_goals = set(ast.literal_eval(f.read()))
+    except Exception as e:
+      print e
+    print 'Previously eep!ing goals: %s' % old_eep_goals
+    new_eeps = current_eep_goals - old_eep_goals
+    adios_eeps = old_eep_goals - current_eep_goals
+    print 'New eeps: %s , adios eeps: %s' % (new_eeps, adios_eeps)
+
+    with open('eeps.txt', 'w') as f:
+      f.write(str(list(current_eep_goals)))
+    for slug in new_eeps:
+      slack_msg_eep(slug)
+    for slug in adios_eeps:
+      slack_msg_adios(slug, len(current_eep_goals))
 
 print 'Beedash ran successfully at %s' % datetime.now()
