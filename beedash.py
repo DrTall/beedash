@@ -154,7 +154,7 @@ Datapoint = collections.namedtuple('Datapoint', [
     'daystamp', 'canonical'])
 
 goals = []
-lint_violations = []
+lint_violations = set()
 for auth_token in secrets.BEEMINDER_AUTH_TOKENS:
   beeminder_url = 'https://www.beeminder.com/api/v1/users/me.json'
   beeminder_url += ('?diff_since=%s&' % SAMPLE_END_EPOCH)  + urllib.urlencode(
@@ -172,7 +172,7 @@ for goal in goals:
       for p in points]
 
   if goal['slug'] == secrets.BEELINT_GOAL_NAME and points:
-    lint_violations = points[-1].comment.split(',')
+    lint_violations = set(points[-1].comment.split(','))
     print 'Found the Beelint goal! lint_violations = %s' % lint_violations
 
 
@@ -314,45 +314,53 @@ with codecs.open(secrets.DASHBOARD_PATH, 'w', 'utf-8') as f:
 
 if secrets.SLACK_AUTH_TOKEN:
   print 'Currently eep!ing goals: %s' % current_eep_goals
-  def slack_msg_eep(slug):
+  def slack_msg_eep(slug, eep_type):
       sc.api_call(
         'chat.postMessage',
         channel=secrets.SLACK_CHAN_ID,
         username='Beeminder Bot',
         icon_url='https://avatars.slack-edge.com/2015-10-26/13284050673_1c5942e75748a08869cf_48.jpg',
-        text="Eep! %s's Beeminder goal <http://www.beeminder.com/%s/goals/%s|%s> is red!" % (
-            secrets.SLACK_BEEMINDER_FRIENDLY_NAME, secrets.SLACK_BEEMINDER_USERNAME, slug, slug))
-  def slack_msg_adios(slug, num_left):
+        text="Eep! %s's Beeminder goal <http://www.beeminder.com/%s/goals/%s|%s> is %s!" % (
+            secrets.SLACK_BEEMINDER_FRIENDLY_NAME, secrets.SLACK_BEEMINDER_USERNAME, slug, slug, eep_type))
+  def slack_msg_adios(slug, eep_type, num_left):
       left_str = '%s more eep!s left today.' % num_left if num_left else 'No more eep!s left today! Hooray!'
       sc.api_call(
         'chat.postMessage',
         channel=secrets.SLACK_CHAN_ID,
         username='Beeminder Bot',
         icon_url='https://avatars.slack-edge.com/2015-10-26/13284050673_1c5942e75748a08869cf_48.jpg',
-        text="Whew, %s's Beeminder goal <http://www.beeminder.com/%s/goals/%s|%s> is no longer red!\n%s" % (
-            secrets.SLACK_BEEMINDER_FRIENDLY_NAME, secrets.SLACK_BEEMINDER_USERNAME, slug, slug, left_str))
+        text="Whew, %s's Beeminder goal <http://www.beeminder.com/%s/goals/%s|%s> is no longer %s!\n%s" % (
+            secrets.SLACK_BEEMINDER_FRIENDLY_NAME, secrets.SLACK_BEEMINDER_USERNAME, slug, slug, eep_type, left_str))
 
 
   sc = SlackClient(secrets.SLACK_AUTH_TOKEN)
   if not sc.rtm_connect():
       print "Slack connection failed!"
   else:
-    old_eep_goals = set()
+    old_eep_goals, old_lint_goals = set(), set()
     try:
       with open('eeps.txt') as f:
-        old_eep_goals = set(ast.literal_eval(f.read()))
+        old_eep_goals, old_lint_goals = ast.literal_eval(f.read())
+        old_eep_goals, old_lint_goals = set(old_eep_goals), set(old_lint_goals)
     except Exception as e:
       print e
     print 'Previously eep!ing goals: %s' % old_eep_goals
     new_eeps = current_eep_goals - old_eep_goals
+    new_lints = lint_violations - old_lint_goals
     adios_eeps = old_eep_goals - current_eep_goals
+    adios_lints = old_lint_goals - lint_violations
     print 'New eeps: %s , adios eeps: %s' % (new_eeps, adios_eeps)
+    print 'New lints: %s , adios lints: %s' % (new_lints, adios_lints)
 
     with open('eeps.txt', 'w') as f:
-      f.write(str(list(current_eep_goals)))
+      f.write(str((list(current_eep_goals), list(lint_violations))))
     for slug in new_eeps:
-      slack_msg_eep(slug)
+      slack_msg_eep(slug, 'red')
+    for slug in new_lints:
+      slack_msg_eep(slug, 'pink')
     for slug in adios_eeps:
-      slack_msg_adios(slug, len(current_eep_goals))
+      slack_msg_adios(slug, 'red', len(current_eep_goals))
+    for slug in adios_lints:
+      slack_msg_adios(slug, 'pink', len(lint_violations))
 
 print 'Beedash ran successfully at %s' % datetime.now()
