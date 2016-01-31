@@ -173,6 +173,8 @@ for goal in goals:
 
   if goal['slug'] == secrets.BEELINT_GOAL_NAME and points:
     lint_violations = set(points[-1].comment.split(','))
+    if not any(lint_violations):
+      lint_violations = set()
     print 'Found the Beelint goal! lint_violations = %s' % lint_violations
 
 
